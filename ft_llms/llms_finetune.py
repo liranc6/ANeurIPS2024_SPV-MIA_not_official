@@ -105,7 +105,9 @@ if __name__ == "__main__":
 
 
     if "WANDB_PROJECT" not in os.environ:
-        os.environ["WANDB_PROJECT"] = "GPT_finetuning"
+        os.environ["WANDB_DISABLED"] = "true"
+        os.environ["WANDB_SILENT"] = "true"
+        logger.info("Wandb disabled by default.")
 
     if args.split_model:
         logger.info("Splitting the model across all available devices...")
