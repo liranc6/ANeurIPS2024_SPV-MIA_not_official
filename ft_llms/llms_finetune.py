@@ -232,7 +232,7 @@ if __name__ == "__main__":
         do_eval=True,
         output_dir=args.output_dir,
         dataloader_drop_last=True,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         save_strategy="steps",
         logging_strategy="steps",
         num_train_epochs=args.epochs,
