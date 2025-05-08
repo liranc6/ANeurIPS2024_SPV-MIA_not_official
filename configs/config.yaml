@@ -1,8 +1,13 @@
 random_seed: 48
 
-model_name: gpt2
-target_model: ./ft_llms/gpt2/wikitext/target # <-- merged checkpoint dir
-reference_model: ./ft_llms/gpt2/wikitext/refer # <-- merged checkpoint dir
+#model_name: gpt2
+#target_model: ./ft_llms/gpt2/wikitext/target # <-- merged checkpoint dir
+#reference_model: ./ft_llms/gpt2/wikitext/refer # <-- merged checkpoint dir
+
+model_name: tiiuae/falcon-rw-1b
+target_model: ./ft_llms/falcon/wikitext/target  # <-- Falcon merged checkpoint dir
+reference_model: ./ft_llms/falcon/wikitext/refer  # <-- Falcon merged checkpoint dir
+
 
 dataset_name: wikitext
 dataset_config_name: wikitext-2-raw-v1
