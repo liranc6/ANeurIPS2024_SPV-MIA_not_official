@@ -1,7 +1,7 @@
-import argparse
+# import argparse
 
-import datasets
-import trl
+# import datasets
+# import trl
 from trl import SFTTrainer
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, TrainingArguments, AutoConfig
 from accelerate import Accelerator
@@ -13,71 +13,36 @@ from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_tr
 import pandas as pd
 import sys
 here = os.path.dirname(__file__)
-sys.path.append(os.path.join(here, '..'))
+parent_dir_path = os.path.dirname(here)
+PROJECT_DIR = os.path.dirname(parent_dir_path)
+sys.path.append(parent_dir_path)
+sys.path.append(PROJECT_DIR)
 from data.prepare import dataset_prepare
 from attack.utils import create_folder
 from transformers import LlamaTokenizer, get_scheduler
 import os
 
-from utils import constantlengthdatasetiter, print_trainable_parameters
+
+from ft_llms.utils import constantlengthdatasetiter, print_trainable_parameters
 # trl.trainer.ConstantLengthDataset.__dict__["__iter__"] = constantlengthdatasetiter
 # setattr(trl.trainer.ConstantLengthDataset, "__iter__", constantlengthdatasetiter)
 
 logger = logging.getLogger("finetune")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
-    parser.add_argument("-d", "--dataset_name", type=str, default="wikitext-2-raw-v1")
-    parser.add_argument("-dc", "--dataset_config_name", type=str, default=None, help="The configuration name of the dataset to use (via the datasets library).")
-    parser.add_argument("--cache_path", type=str, default="./cache")
-    parser.add_argument("--use_dataset_cache", action="store_true", default=False)
-    parser.add_argument("--refer", action="store_true", default=False)
-    parser.add_argument("--refer_data_source", type=str, default=None)
-    parser.add_argument("--packing", action="store_true", default=False)
-    parser.add_argument("-t", "--token", type=str, default=None)
-    parser.add_argument("--split_model", action="store_true", default=False)
-    parser.add_argument("--block_size", type=int, default=1024)
-    parser.add_argument("--preprocessing_num_workers", type=int, default=1)
-    parser.add_argument("--peft", type=str, default="lora")
-    parser.add_argument("--lora_rank", type=int, default=64)
-    parser.add_argument("--lora_alpha", type=int, default=16)
-    parser.add_argument("--lora_dropout", type=float, default=0.1)
-    parser.add_argument("--p_tokens", type=int, help="The number of virtual tokens for prefix-tuning or p-tuning", default=20)
-    parser.add_argument("--p_hidden", type=int, help="The hidden size of the prompt encoder", default=128)
+from src.parser import parse_args
 
-    parser.add_argument("-lr", "--learning_rate", type=float, default=1e-4)
-    parser.add_argument("--lr_scheduler_type", type=str, default="linear")
-    parser.add_argument("--warmup_steps", type=int, default=0)
-    parser.add_argument("--weight_decay", type=float, default=0)
-    parser.add_argument("--output_dir", type=str, default="./ft_llms/checkpoints")
-    parser.add_argument("--log_steps", type=int, default=10)
-    parser.add_argument("--eval_steps", type=int, default=10)
-    parser.add_argument("--save_epochs", type=int, default=10)
-    parser.add_argument("-e", "--epochs", type=int, default=1)
-    parser.add_argument("-b", "--batch_size", type=int, default=1)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
-    parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
-    parser.add_argument("--trust_remote_code", action="store_true", default=False)
+def main_llms_finetune(args=None):
+    
+    config_file_relative_path = os.path.join(parent_dir_path, 'configs', 'llms_finetune_config.yaml')
+    
+    tmp_args = parse_args(config_file_relative_path)
+    
+    if args is not None and isinstance(args, dict):
+        tmp_args.update_config_from_dict(args)
+        
+    args = tmp_args
 
-    parser.add_argument("--train_sta_idx", type=int, default=0)
-    parser.add_argument("--train_end_idx", type=int, default=6000)
-    parser.add_argument("--eval_sta_idx", type=int, default=0)
-    parser.add_argument("--eval_end_idx", type=int, default=600)
-
-    parser.add_argument("-s", "--save_limit", type=int, default=None)
-
-    parser.add_argument("--use_int4", action="store_true", default=False)
-    parser.add_argument("--use_int8", action="store_true", default=False)
-    parser.add_argument("--disable_peft", action="store_true", default=False)
-    parser.add_argument("--disable_flash_attention", action="store_true", help="Disable flash attention", default=False)
-
-    parser.add_argument("--pad_token_id", default=None, type=int, help="The end of sequence token.")
-    parser.add_argument("--add_eos_token", action="store_true", help="Add EOS token to tokenizer", default=False)
-    parser.add_argument("--add_bos_token", action="store_true", help="Add BOS token to tokenizer", default=False)
-    parser.add_argument("--validation_split_percentage", default=0.1, help="The percentage of the train set used as validation set in case there's no validation split")
-    args = parser.parse_args()
-
+    
     accelerator = Accelerator()
 
     if args.token is None:
@@ -85,7 +50,9 @@ if __name__ == "__main__":
     else:
         access_token = args.token
 
-    config = AutoConfig.from_pretrained(args.model_name, cache_dir=args.cache_path)
+    config = AutoConfig.from_pretrained(args.model_name,
+                                        token=access_token,
+                                        cache_dir=args.cache_path)
 
     config.use_cache = False
     config_dict = config.to_dict()
@@ -232,7 +199,7 @@ if __name__ == "__main__":
         do_eval=True,
         output_dir=args.output_dir,
         dataloader_drop_last=True,
-        eval_strategy="steps",
+        evaluation_strategy="steps",
         save_strategy="steps",
         logging_strategy="steps",
         num_train_epochs=args.epochs,
@@ -267,6 +234,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
+        dataset_text_field="text",
     )
     trainer.tokenizer = tokenizer
 
@@ -282,3 +250,9 @@ if __name__ == "__main__":
     logger.info("Saving model to output_dir...")
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+    
+    
+if __name__ == "__main__":
+    # ANeurIPS2024_SPV-MIA_not_official/configs/llms_finetune_config.yaml
+    
+    main_llms_finetune()

@@ -23,3 +23,5 @@ tqdm==4.66.1
 transformers==4.34.0
 trl==0.7.1
 typing_extensions==4.8.0
+ruamel.yaml==0.18.10
+python-box==7.3.2

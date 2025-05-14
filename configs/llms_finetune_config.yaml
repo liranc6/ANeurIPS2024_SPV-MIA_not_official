@@ -1,0 +1,60 @@
+debug: false
+debug_config_path: null
+
+# Model configuration
+model_name: 'gpt2' # "meta-llama/Llama-2-7b-hf"
+dataset_name: "wikitext-2-raw-v1"
+dataset_config_name: null  # The configuration name of the dataset to use
+cache_path: "./cache"
+use_dataset_cache: false
+refer: false
+refer_data_source: null
+packing: false
+token: null
+split_model: false
+block_size: 1024
+preprocessing_num_workers: 1
+
+# PEFT configuration
+peft: "lora"
+lora_rank: 64
+lora_alpha: 16
+lora_dropout: 0.1
+p_tokens: 20  # The number of virtual tokens for prefix-tuning or p-tuning
+p_hidden: 128  # The hidden size of the prompt encoder
+
+# Training configuration
+learning_rate: 1.0e-4
+lr_scheduler_type: "linear"
+warmup_steps: 0
+weight_decay: 0
+output_dir: "./ft_llms/checkpoints"
+log_steps: 10
+eval_steps: 10
+save_epochs: 10
+epochs: 1
+batch_size: 1
+gradient_accumulation_steps: 1
+gradient_checkpointing: false
+trust_remote_code: false
+
+# Dataset indices
+train_sta_idx: 0
+train_end_idx: 6000
+eval_sta_idx: 0
+eval_end_idx: 600
+
+# Save configuration
+save_limit: null
+
+# Quantization configuration
+use_int4: false
+use_int8: false
+disable_peft: false
+disable_flash_attention: false
+
+# Tokenizer configuration
+pad_token_id: null
+add_eos_token: false
+add_bos_token: false
+validation_split_percentage: 0.1
