@@ -7,7 +7,11 @@ import logging
 import random
 import sys
 here = os.path.dirname(__file__)
-sys.path.append(os.path.join(here, '..'))
+here = os.path.dirname(__file__)
+parent_dir_path = os.path.dirname(here)
+PROJECT_DIR = os.path.dirname(parent_dir_path)
+sys.path.append(parent_dir_path)
+sys.path.append(PROJECT_DIR)
 from data.prepare import dataset_prepare
 from attack.utils import Dict
 import argparse
@@ -19,23 +23,19 @@ from accelerate.logging import get_logger
 import trl
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM, BitsAndBytesConfig, TrainingArguments, AutoConfig, LlamaTokenizer
 
+
+from src.parser import parse_args
+
 def run_data_generation(args=None):
     # Create a parser only if args weren't provided
-    if args is None:
-        parser = argparse.ArgumentParser()
-        parser.add_argument("-m", "--model_name", type=str, default="meta-llama/Llama-2-7b-hf")
-        parser.add_argument("-tm", "--target_model", type=str, default="meta-llama/Llama-2-7b-hf")
-        parser.add_argument("-d", "--dataset_name", type=str, default="wikitext-2-raw-v1")
-        parser.add_argument("-dc", "--dataset_config_name", type=str, default=None,
-                            help="The configuration name of the dataset to use (via the datasets library).")
-        parser.add_argument("--cache_path", type=str, default="./cache")
-        parser.add_argument("--use_dataset_cache", action="store_true", default=True)
-        parser.add_argument("--packing", action="store_true", default=True)
-        parser.add_argument("--block_size", type=int, default=128)
-        parser.add_argument("--preprocessing_num_workers", type=int, default=1)
-        parser.add_argument("--validation_split_percentage", default=0.1,
-                            help="The percentage of the train set used as validation set in case there's no validation split")
-        args = parser.parse_args()
+    config_file_relative_path = os.path.join(parent_dir_path, 'configs', 'refer_data_generate_config.yaml')
+    
+    tmp_args = parse_args(config_file_relative_path)
+    
+    if args is not None and isinstance(args, dict):
+        tmp_args.update_config_from_dict(args)
+        
+    args = tmp_args
     
     # For debugging, print the arguments being used
     print("Running with arguments:", args)
