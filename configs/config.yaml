@@ -1,12 +1,15 @@
+debug: false
+debug_config_path: null
+
 random_seed: 48
 
-#model_name: gpt2
-#target_model: ./ft_llms/gpt2/wikitext/target # <-- merged checkpoint dir
-#reference_model: ./ft_llms/gpt2/wikitext/refer # <-- merged checkpoint dir
+model_name: gpt2
+target_model: /home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms/gpt2/wikitext/target/ # ./ft_llms/gpt2/wikitext/target # <-- merged checkpoint dir
+reference_model: /home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms/gpt2/wikitext/refer/ # ./ft_llms/gpt2/wikitext/refer # <-- merged checkpoint dir
 
-model_name: tiiuae/falcon-rw-1b
-target_model: ./ft_llms/falcon/wikitext/target  # <-- Falcon merged checkpoint dir
-reference_model: ./ft_llms/falcon/wikitext/refer  # <-- Falcon merged checkpoint dir
+# model_name: tiiuae/falcon-rw-1b
+# target_model: ./ft_llms/falcon/wikitext/target  # <-- Falcon merged checkpoint dir
+# reference_model: ./ft_llms/falcon/wikitext/refer  # <-- Falcon merged checkpoint dir
 
 
 dataset_name: wikitext

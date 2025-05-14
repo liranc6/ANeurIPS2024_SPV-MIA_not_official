@@ -18,13 +18,26 @@ from accelerate.logging import get_logger
 import trl
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM, BitsAndBytesConfig, TrainingArguments, AutoConfig, LlamaTokenizer
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+import sys
+import os
+here = os.path.dirname(__file__)
+parent_dir_path = os.path.dirname(here)
+PROJECT_DIR = os.path.dirname(parent_dir_path)
+sys.path.append(parent_dir_path)
+sys.path.append(PROJECT_DIR)
 
-def run_attack():
+from src.parser import parse_args
+
+def run_attack(args=None):
     
-    # Load config file
-    with open("configs/config.yaml", 'r') as f:
-        cfg = yaml.safe_load(f)
-        cfg = Dict(cfg)
+    config_file_relative_path = os.path.join(here, 'configs', 'config.yaml')
+    
+    tmp_args = parse_args(config_file_relative_path)
+    
+    if args is not None and isinstance(args, dict):
+        tmp_args.update_config_from_dict(args)
+        
+    cfg = tmp_args.configs
 
     # Add Logger
     accelerator = Accelerator()
