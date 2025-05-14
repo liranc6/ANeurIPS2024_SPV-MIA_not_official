@@ -1,5 +1,5 @@
 # Data Generation Configuration
-debug: false  # Set to true for debugging purposes
+debug: false
 debug_config_path: null
 
 # Model parameters
