@@ -31,17 +31,24 @@ logger = logging.getLogger("finetune")
 
 from src.parser import parse_args
 
-def main_llms_finetune(args=None):
+def main_llms_finetune(args_filename=None, args_dict=None):
     
-    config_file_relative_path = os.path.join(parent_dir_path, 'configs', 'llms_finetune_config.yaml')
-    
-    tmp_args = parse_args(config_file_relative_path)
-    
-    if args is not None and isinstance(args, dict):
-        tmp_args.update_config_from_dict(args)
+    if args_filename is not None:
+        assert os.path.exists(args_filename), f"Config file {args_filename} does not exist"
+        tmp_args = parse_args(args_filename)
+    else:
+        args_filename = os.path.join(parent_dir_path, 'configs', 'llms_finetune_config.yaml')
+        tmp_args = parse_args(args_filename)
+        
+    if args_dict is not None:
+        assert isinstance(args_dict, dict), f"args_dict should be a dictionary"
+        tmp_args.update_config_from_dict(args_dict)
+        
         
     args = tmp_args
 
+    # print the arguments being used
+    args.print_config()
     
     accelerator = Accelerator()
 
@@ -187,10 +194,17 @@ def main_llms_finetune(args=None):
         train_dataset, valid_dataset = dataset_prepare(args, tokenizer=tokenizer)
         if args.refer:
             train_dataset = None
-            refer_data_path = f"{args.cache_path}/{args.dataset_name}/{args.dataset_config_name}/refer@{args.model_name}/"
+            # if args.debug:
+            #     refer_data_path = os.path.join(args.cache_path, 'debug', args.dataset.name, args.dataset.config_name, f"refer@gpt2")
+            # else:
+            refer_data_path = args.generated_dataset_dir
             train_dataset = load_from_disk(refer_data_path)
-        train_dataset = Dataset.from_dict(train_dataset[args.train_sta_idx:args.train_end_idx])
-        valid_dataset = Dataset.from_dict(valid_dataset[args.eval_sta_idx:args.eval_end_idx])
+            
+        if args.debug:
+            args.dataset.eval.end_idx = 30
+            args.dataset.train.end_idx = 30
+        train_dataset = Dataset.from_dict(train_dataset[args.dataset.train.start_idx:args.dataset.train.end_idx])
+        valid_dataset = Dataset.from_dict(valid_dataset[args.dataset.eval.start_idx:args.dataset.eval.end_idx])
         # train_dataset = load_from_disk("/mnt/data0/fuwenjie/MIA-LLMs/cache/ag_news/None/refer@gpt2")
 
     logger.info(f"Training with {Accelerator().num_processes} GPUs")
@@ -220,8 +234,8 @@ def main_llms_finetune(args=None):
         logging_dir="./logs",
         load_best_model_at_end=False,
         save_total_limit=args.save_limit,
-        bf16=True if torch.cuda.is_bf16_supported() else False,
-        fp16=False if torch.cuda.is_bf16_supported() else True,
+        bf16=False, #torch.cuda.is_bf16_supported(),
+        fp16=True, #not torch.cuda.is_bf16_supported(),
     )
 
     logger.info(f"Train dataset size: {len(train_dataset)}")

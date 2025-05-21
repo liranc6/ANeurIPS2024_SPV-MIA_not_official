@@ -50,19 +50,19 @@ def packing_texts(examples):
         "text": packed_texts
     }
 def dataset_prepare(args, tokenizer=None, num_of_sequences=1024, chars_per_token=3.6):
-    # raw_datasets = datasets.load_dataset(args.dataset_name, args.dataset_config_name)['train']
+    # raw_datasets = datasets.load_dataset(args.dataset.name, args.dataset.config_name)['train']
     # if "validation" in raw_datasets.keys():
     #     train_dataset = raw_datasets["train"]
     #     valid_dataset = raw_datasets["validation"]
     # else:
     train_dataset = datasets.load_dataset(
-        args.dataset_name,
-        args.dataset_config_name,
+        args.dataset.name,
+        args.dataset.config_name,
         split=f"train[:{int((1-args.validation_split_percentage)*100)}%]"
     )
     valid_dataset = datasets.load_dataset(
-        args.dataset_name,
-        args.dataset_config_name,
+        args.dataset.name,
+        args.dataset.config_name,
         split=f"train[{int((1-args.validation_split_percentage)*100)}%:]",
     )
 
@@ -70,7 +70,19 @@ def dataset_prepare(args, tokenizer=None, num_of_sequences=1024, chars_per_token
     # valid_idxs = set(range(len(raw_datasets))) - train_idxs
     # train_dataset = datasets.Dataset.from_dict(raw_datasets[train_idxs])
     # valid_dataset = datasets.Dataset.from_dict(raw_datasets[valid_idxs])
-
+    
+    # Apply dataset train/eval indices from config if provided
+    if hasattr(args.dataset, 'train') and hasattr(args.dataset.train, 'start_idx') and hasattr(args.dataset.train, 'end_idx'):
+        end_idx = args.dataset.train.end_idx if args.dataset.train.end_idx > 0 else len(train_dataset)
+        start_idx = args.dataset.train.start_idx if args.dataset.train.start_idx > 0 else 0
+        train_dataset = train_dataset.select(range(start_idx, end_idx))
+        print(f"Selected train data from index {args.dataset.train.start_idx} to {end_idx} (total: {len(train_dataset)})")
+    
+    if hasattr(args.dataset, 'eval') and hasattr(args.dataset.eval, 'start_idx') and hasattr(args.dataset.eval, 'end_idx'):
+        end_idx = args.dataset.eval.end_idx if args.dataset.eval.end_idx > 0 else len(valid_dataset)
+        start_idx = args.dataset.eval.start_idx if args.dataset.eval.start_idx > 0 else 0
+        valid_dataset = valid_dataset.select(range(start_idx, end_idx))
+        print(f"Selected evaluation data from index {args.dataset.eval.start_idx} to {end_idx} (total: {len(valid_dataset)})")
 
     global text_column
     column = train_dataset.column_names
@@ -92,13 +104,13 @@ def dataset_prepare(args, tokenizer=None, num_of_sequences=1024, chars_per_token
         block_size = args.block_size
         max_buff_size = block_size * chars_per_token * num_of_sequences
         tokenizer_ = tokenizer
-        create_folder(f"{args.cache_path}/{args.dataset_name}/{args.dataset_config_name}")
+        create_folder(f"{args.cache_path}/{args.dataset.name}/{args.dataset.config_name}")
         train_dataset = train_dataset.map(
             packing_texts,
             batched=True,
             # batch_size=None,
             num_proc=args.preprocessing_num_workers,
-            cache_file_name=f"{args.cache_path}/{args.dataset_name}/{args.dataset_config_name}/train_dataset",
+            cache_file_name=f"{args.cache_path}/{args.dataset.name}/{args.dataset.config_name}/train_dataset",
             load_from_cache_file=args.use_dataset_cache,
             desc=f"Packing texts in chunks of {block_size} tokens"
         )
@@ -107,7 +119,7 @@ def dataset_prepare(args, tokenizer=None, num_of_sequences=1024, chars_per_token
             batched=True,
             # batch_size=None,
             num_proc=args.preprocessing_num_workers,
-            cache_file_name=f"{args.cache_path}/{args.dataset_name}/{args.dataset_config_name}/valid_dataset",
+            cache_file_name=f"{args.cache_path}/{args.dataset.name}/{args.dataset.config_name}/valid_dataset",
             load_from_cache_file=args.use_dataset_cache,
             desc=f"Packing texts in chunks of {block_size} tokens"
         )

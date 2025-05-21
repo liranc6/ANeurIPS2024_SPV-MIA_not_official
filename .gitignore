@@ -13,3 +13,8 @@
 
 # ft_llms/{cache, checkpoints}
 
+/__pycache__/
+
+generate_CLI_args*
+
+roc_stat.png

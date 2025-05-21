@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import torch
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm as original_tqdm
 from torch.utils.data import DataLoader
 import logging
 import random
@@ -26,19 +26,29 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2Se
 
 from src.parser import parse_args
 
-def run_data_generation(args=None):
-    # Create a parser only if args weren't provided
-    config_file_relative_path = os.path.join(parent_dir_path, 'configs', 'refer_data_generate_config.yaml')
+def tqdm(*args, **kwargs):
+    if 'dynamic_ncols' not in kwargs:
+        kwargs['dynamic_ncols'] = True
+    return original_tqdm(*args, **kwargs)
+
+def run_data_generation(args_filename=None, args_dict=None):
     
-    tmp_args = parse_args(config_file_relative_path)
-    
-    if args is not None and isinstance(args, dict):
-        tmp_args.update_config_from_dict(args)
+    if args_filename is not None:
+        assert os.path.exists(args_filename), f"Config file {args_filename} does not exist"
+        tmp_args = parse_args(args_filename)
+    else:
+        args_filename = os.path.join(parent_dir_path, 'configs', 'refer_data_generate_config.yaml')
+        tmp_args = parse_args(args_filename)
         
+    if args_dict is not None:
+        assert isinstance(args_dict, dict), f"args_dict should be a dictionary"
+        tmp_args.update_config_from_dict(args_dict)
+
+    
     args = tmp_args
     
-    # For debugging, print the arguments being used
-    print("Running with arguments:", args)
+    # print the arguments being used
+    args.print_config()
     
     # Create an accelerator for this run
     accelerator = Accelerator()
@@ -78,7 +88,7 @@ def run_data_generation(args=None):
     print(f"Train dataset size: {len(train_dataset)}")
     
     # Take a subset for prompt generation
-    prompt_dataset = Dataset.from_dict(train_dataset[10000:20000])
+    prompt_dataset = train_dataset# Dataset.from_dict(train_dataset)
     prompt_dataloader = DataLoader(prompt_dataset, batch_size=1)
 
     model, prompt_dataloader = accelerator.prepare(model, prompt_dataloader)
@@ -118,11 +128,9 @@ def run_data_generation(args=None):
             generated_dataset["text"].extend(gen_text)
             
             # Periodically print a sample
-            if i % 100 == 0:
+            if i % 200 == 0:
                 print(f"Sample generated text: {gen_text[0][:100]}...")
                 
-            if i > 60:
-                break
                 
         except Exception as e:
             print(f"Error processing batch {i}: {e}")
@@ -136,10 +144,11 @@ def run_data_generation(args=None):
     # Handle special model name case
     if args.model_name == "/mnt/data0/fuwenjie/MIA-LLMs/cache/models--decapoda-research--llama-7b-hf/snapshots/5f98eefcc80e437ef68d457ad7bf167c2c6a1348":
         args.model_name = "decapoda-research/llama-7b-hf"
+    
         
-    save_dir = f"{args.cache_path}/{args.dataset_name}/{args.dataset_config_name}/refer@{args.model_name}/"
+    save_dir = args.generated_dataset_dir #os.path.join(args.cache_path, args.dataset_name, args.dataset.config_name, f"refer@{args.model_name}", args.curr_time_str)
     print(f"Saving generated dataset to {save_dir}{accelerator.device}")
-    generated_dataset.save_to_disk(save_dir + f"{accelerator.device}")
+    generated_dataset.save_to_disk(os.path.join(save_dir, f"{accelerator.device}"))
 
     accelerator.wait_for_everyone()
 
