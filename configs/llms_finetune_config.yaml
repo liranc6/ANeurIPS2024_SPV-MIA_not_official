@@ -9,10 +9,10 @@ cache_path: "./cache"
 use_dataset_cache: false
 refer: false
 refer_data_source: null
-packing: false
+packing: True
 token: null
 split_model: false
-block_size: 1024
+block_size: 128
 preprocessing_num_workers: 1
 
 # PEFT configuration
@@ -24,16 +24,16 @@ p_tokens: 20  # The number of virtual tokens for prefix-tuning or p-tuning
 p_hidden: 128  # The hidden size of the prompt encoder
 
 # Training configuration
-learning_rate: 1.0e-4
+learning_rate: 0.0001
 lr_scheduler_type: "linear"
 warmup_steps: 0
 weight_decay: 0
 output_dir: "./ft_llms/checkpoints"
-log_steps: 10
-eval_steps: 10
-save_epochs: 10
+log_steps: 200
+eval_steps: 100
+save_epochs: 100
 epochs: 1
-batch_size: 1
+batch_size: 16
 gradient_accumulation_steps: 1
 gradient_checkpointing: false
 trust_remote_code: false
@@ -51,7 +51,7 @@ save_limit: null
 use_int4: false
 use_int8: false
 disable_peft: false
-disable_flash_attention: false
+disable_flash_attention: True
 
 # Tokenizer configuration
 pad_token_id: null

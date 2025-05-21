@@ -1,0 +1,49 @@
+# General settings
+random_seed: 48
+curr_time_str: '2025-05-20_14-06'  # Will use current time if null
+
+# Model and dataset configuration
+model_name: "gpt2"  # ['gpt2', 'tiiuae/falcon-rw-1b', 'EleutherAI/gpt-j-6B', 'meta-llama/Llama-2-7b-hf']
+
+dataset:
+  name: "wikitext"  # ['wikitext', 'xsum', 'ag_news'] and maybe, ['squad', 'squad_v2', 'wmt14']
+  config_name: "wikitext-2-raw-v1"  # ['wikitext-2-raw-v1', 'EdinburghNLP/xsum', 'fancyzhx/ag_news']
+  train:
+    start_idx: 0
+    end_idx: 30
+  eval:
+    start_idx: 0
+    end_idx: 30
+
+# Paths and caching
+cache_path: "./cache/debug"
+use_dataset_cache: true
+base_output_dir: "./ft_llms/debug"
+
+# Target model training config
+target_model_args:
+  epochs: 2
+
+# Reference data generation config
+refer_data_args:
+  cache_path: "./cache/debug"
+
+# Reference model training config
+reference_model_args:
+  epochs: 2
+
+# Attack configuration
+attack_args:
+  attack_type: "ours"  # ['ours', 'SPV-MIA_correct_split_to_tokens', 'SPV-MIA_split_to_words']
+  attack_strategy:
+    name: "embeddings"
+    peak_top_k: 19
+    max_neighbors: 2
+    n_tokens: 5
+  eval_batch_size: 8
+  maximum_samples: 5
+  load_attack_data: false
+
+# Visualization settings
+save_fig: False
+show_fig: False

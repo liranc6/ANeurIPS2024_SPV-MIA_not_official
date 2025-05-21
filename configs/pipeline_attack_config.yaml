@@ -1,0 +1,77 @@
+# General settings
+debug: False
+random_seed: 48
+curr_time_str: null  # Will use current time if null
+
+# Model and dataset configuration
+model_name: "gpt2"  # ['gpt2', 'tiiuae/falcon-rw-1b', 'EleutherAI/gpt-j-6B', 'meta-llama/Llama-2-7b-hf']
+
+dataset:
+  name: "wikitext"  # ['wikitext', 'xsum', 'ag_news'] and maybe, ['squad', 'squad_v2', 'wmt14']
+  config_name: "wikitext-2-raw-v1"  # ['wikitext-2-raw-v1', 'EdinburghNLP/xsum', 'fancyzhx/ag_news']
+  train:
+    start_idx: 0
+    end_idx: -1
+  eval:
+    start_idx: 0
+    end_idx: -1
+
+# Script paths
+finetune_script_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms/llms_finetune.py"
+refer_data_script_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms/refer_data_generate.py"
+attack_script_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/run_attack.py"
+
+# configs paths
+finetune_config_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/configs/llms_finetune_config.yaml"
+debug_config_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/configs/debug_pipeline_attack_config.yaml"
+data_generation_config_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/configs/refer_data_generate_config.yaml"
+
+# Paths and caching
+cache_path: "./cache"
+use_dataset_cache: true
+base_output_dir: "./ft_llms"
+
+# Common model parameters
+block_size: 128
+preprocessing_num_workers: 1
+validation_split_percentage: 0.1
+disable_flash_attention: true
+packing: true
+local_files_only: false
+
+# Target model training config
+target_model_args:
+  refer: false
+  output_dir: null  # Will be constructed from base_output_dir, model_name, dataset_name, and curr_time_str
+  epochs: 10
+
+# Reference data generation config
+refer_data_args:
+  cache_path: "./cache"
+  use_dataset_cache: true
+  packing: true
+  preprocessing_num_workers: 1
+  validation_split_percentage: 0.1
+  local_files_only: false
+
+# Reference model training config
+reference_model_args:
+  refer: true
+  output_dir: null  # Will be constructed from base_output_dir, model_name, dataset_name, and curr_time_str
+  epochs: 4
+
+# Attack configuration
+attack_args:
+  attack_type: "ours"  # ['ours', 'SPV-MIA_correct_split_to_tokens', 'SPV-MIA_split_to_words']
+  attack_strategy:
+    name: "embeddings"
+    peak_top_k: 19
+    max_neighbors: 2
+    n_tokens: 5
+  eval_batch_size: 8
+  maximum_samples: 200
+  load_attack_data: false
+
+# Visualization settings
+save_fig: true
+show_fig: true

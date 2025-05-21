@@ -3,7 +3,7 @@ debug_config_path: null
 
 random_seed: 48
 
-model_name: gpt2
+model_name: gpt2 # ['gpt2', 'tiiuae/falcon-rw-1b']
 target_model: /home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms/gpt2/wikitext/target/ # ./ft_llms/gpt2/wikitext/target # <-- merged checkpoint dir
 reference_model: /home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms/gpt2/wikitext/refer/ # ./ft_llms/gpt2/wikitext/refer # <-- merged checkpoint dir
 
@@ -25,14 +25,14 @@ add_bos_token: false
 pad_token_id: null
 
 attack_kind: stat # valid attacks: nn, stat
-eval_batch_size: 8 # batch size of the evaluation phase
+# eval_batch_size: 8 # batch size of the evaluation phase
 maximum_samples: 200 # the maximum samples number for member and non-member records.
 
-block_size: 128
+# block_size: 128
 validation_split_percentage: 0.1
 preprocessing_num_workers: 1
 
-mask_filling_model_name: t5-base
+mask_filling_model_name: gpt2  # ['t5-base', 'gpt2']
 buffer_size: 1
 mask_top_p: 1.0
 span_length: 2
@@ -43,12 +43,14 @@ int8: false
 half: true
 
 perturbation_number: 1 # the number of different perturbation strength / position; debugging parameter, should be set to 1 in the regular running.
-sample_number: 10 # the number of sampling
+sample_number: 10  # the number of perturbations to be generated for each perturbation strength / position; debugging parameter, should be set to 1 in the regular running.
 
-train_sta_idx: 0
-train_end_idx: 2000
-eval_sta_idx: 0
-eval_end_idx: 500
+# train_sta_idx: 0
+# train_end_idx: 2000
+# eval_sta_idx: 0
+# eval_end_idx: 500
 
 attack_data_path: cache/wikitext/wikitext-2-raw-v1
 load_attack_data: false # whether to load prepared attack data if existing.
+
+closest_tokens_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/models/gpt2/embeddings/token_knn_mapping_20_cosine.pth" # the path to the token knn mapping file

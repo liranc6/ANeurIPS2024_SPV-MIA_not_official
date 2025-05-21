@@ -17,3 +17,5 @@ packing: true
 block_size: 128
 preprocessing_num_workers: 1
 validation_split_percentage: 0.1  # The percentage of the train set used as validation set in case there's no validation split
+
+local_files_only: false
