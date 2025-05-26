@@ -22,6 +22,8 @@ PROJECT_DIR = os.path.dirname(parent_dir_path)
 sys.path.append(parent_dir_path)
 sys.path.append(PROJECT_DIR)
 
+# Change working directory to script location
+os.chdir(here)
 
 from src.parser import parse_args
 

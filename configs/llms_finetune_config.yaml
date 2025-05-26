@@ -3,8 +3,8 @@ debug_config_path: null
 
 # Model configuration
 model_name: 'gpt2' # "meta-llama/Llama-2-7b-hf"
-dataset_name: "wikitext-2-raw-v1"
-dataset_config_name: null  # The configuration name of the dataset to use
+dataset_name: "wikitext"
+dataset_config_name: "wikitext-2-raw-v1"  # The configuration name of the dataset to use
 cache_path: "./cache"
 use_dataset_cache: false
 refer: false
@@ -58,3 +58,34 @@ pad_token_id: null
 add_eos_token: false
 add_bos_token: false
 validation_split_percentage: 0.1
+
+# Distributed training configuration
+distributed_training:
+  use_distributed: false
+  num_processes: 0 # Number of processes for distributed training
+  strategy: "ddp"  # ['ddp', 'fsdp', 'deepspeed']
+  devices: "auto" # Automatically set to the number of GPUs available or specify a number
+  fsdp_config:                  # only used if strategy == 'fsdp'
+    sharding_strategy: "FULL_SHARD" # ["FULL_SHARD", "SHARD_GRAD_OP", "NO_SHARD"]
+    auto_wrap_policy: "transformer" # ["transformer", "size", "none"]
+    cpu_offload: false
+
+# Wandb configuration
+wandb:
+  enable: false
+  project_name: "LLM_MIA"
+  notes: null  # Will be constructed from model_name, dataset_name, and curr_time_str
+  mode: "online"                # ["online", "offline", "disabled"]
+  log_model: false
+  save_code: true
+
+# Dataset configuration
+dataset:
+  name: "wikitext"  # This maps to your current dataset_name
+  config_name: "wikitext-2-raw-v1"  # This maps to your current dataset_config_name
+  train:
+    start_idx: 0  # This maps to your current train_sta_idx
+    end_idx: 6000  # This maps to your current train_end_idx
+  eval:
+    start_idx: 0  # This maps to your current eval_sta_idx
+    end_idx: 600  # This maps to your current eval_end_idx
