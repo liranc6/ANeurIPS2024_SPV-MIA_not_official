@@ -2,6 +2,7 @@
 debug: False
 random_seed: 48
 curr_time_str: null  # Will use current time if null
+use_accelerate: true
 
 # Model and dataset configuration
 model_name: "gpt2"  # ['gpt2', 'tiiuae/falcon-rw-1b', 'EleutherAI/gpt-j-6B', 'meta-llama/Llama-2-7b-hf']
@@ -25,6 +26,7 @@ attack_script_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/proj
 finetune_config_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/configs/llms_finetune_config.yaml"
 debug_config_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/configs/debug_pipeline_attack_config.yaml"
 data_generation_config_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/configs/refer_data_generate_config.yaml"
+accelerate_config: null # "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/configs/accelerate_config.yaml"
 
 # Paths and caching
 cache_path: "./cache"

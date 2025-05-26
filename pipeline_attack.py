@@ -250,7 +250,7 @@ def run_experiment(override_args=None):
     print(f"TPR at 1% FPR: {tpr_at_1pct_fpr}")
     
     results_csv_path = "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/exp_results.csv"
-    with open("results_csv_path", "a") as f:
+    with open(results_csv_path, "a") as f:
         f.write(f"{model_name},{dataset_name},{dataset_config_name},{args.attack_args.attack_type},{args.attack_args.peak_top_k},{auc_score},{tpr_at_1pct_fpr}\n")
     print(f"Results saved to {results_csv_path}")
 
