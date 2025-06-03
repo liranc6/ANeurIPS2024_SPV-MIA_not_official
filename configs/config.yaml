@@ -1,4 +1,4 @@
-debug: false
+debug: False
 debug_config_path: null
 
 random_seed: 48

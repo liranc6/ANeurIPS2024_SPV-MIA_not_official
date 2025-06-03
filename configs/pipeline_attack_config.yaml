@@ -1,7 +1,7 @@
 # General settings
-debug: False
+debug: True
 random_seed: 48
-curr_time_str: null  # Will use current time if null
+curr_time_str: '2025-05-29_11-18'  # Will use current time if null
 use_accelerate: true
 
 # Model and dataset configuration
@@ -9,13 +9,13 @@ model_name: "gpt2"  # ['gpt2', 'tiiuae/falcon-rw-1b', 'EleutherAI/gpt-j-6B', 'me
 
 dataset:
   name: "wikitext"  # ['wikitext', 'xsum', 'ag_news'] and maybe, ['squad', 'squad_v2', 'wmt14']
-  config_name: "wikitext-2-raw-v1"  # ['wikitext-2-raw-v1', 'EdinburghNLP/xsum', 'fancyzhx/ag_news']
+  config_name: "wikitext-2-raw-v1"  # ['wikitext-2-raw-v1', 'EdinburghNLP/xsum', 'ag_news']
   train:
     start_idx: 0
-    end_idx: -1
+    end_idx: 20 #-1
   eval:
     start_idx: 0
-    end_idx: -1
+    end_idx: 20 #-1
 
 # Script paths
 finetune_script_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms/llms_finetune.py"
@@ -29,9 +29,9 @@ data_generation_config_path: "/home/liranc6/W25/adversarial-attacks-on-deep-lear
 accelerate_config: null # "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/configs/accelerate_config.yaml"
 
 # Paths and caching
-cache_path: "./cache"
+cache_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/cache"
 use_dataset_cache: true
-base_output_dir: "./ft_llms"
+base_output_dir: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms"
 
 # Common model parameters
 block_size: 128
@@ -49,7 +49,7 @@ target_model_args:
 
 # Reference data generation config
 refer_data_args:
-  cache_path: "./cache"
+  cache_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/cache"
   use_dataset_cache: true
   packing: true
   preprocessing_num_workers: 1
@@ -77,3 +77,12 @@ attack_args:
 # Visualization settings
 save_fig: true
 show_fig: true
+
+# Wandb configuration
+wandb:
+  enable: true
+  project_name: "LLM_MIA"
+  notes: null  # Will be constructed from model_name, dataset_name, and curr_time_str
+  mode: "online"                # ["online", "offline", "disabled"]
+  log_model: false
+  save_code: true

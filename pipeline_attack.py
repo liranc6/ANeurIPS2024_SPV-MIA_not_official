@@ -3,18 +3,20 @@ import sys
 import time
 import sys
 import os
-from weakref import ref
-from regex import E, F
+# from weakref import ref
+# from regex import E, F
 import numpy as np
 import matplotlib.pyplot as plt
 
 import time
 
-# Check GPU availability
 import torch
 torch.cuda.is_available(), torch.cuda.get_device_name(0)
 
+import warnings
+from transformers import logging as transformers_logging
 
+# import traceback
 
 here = os.path.dirname(__file__)
 parent_dir_path = os.path.dirname(__file__)
@@ -53,7 +55,7 @@ def import_required_modules(args):
     sys.path.append(os.path.dirname(attack_script_path))
     from run_attack import run_attack as run_attack_function
 
-def plot_roc_curve(model_name, dataset_name, dataset_config_name, save_fig=True, show_fig=True):
+def plot_roc_curve(model_name, dataset_name, dataset_config_name, save_fig=True, show_fig=True, ROC_dir=None):
     """
     Plot ROC curve for membership inference attack results.
     
@@ -67,16 +69,15 @@ def plot_roc_curve(model_name, dataset_name, dataset_config_name, save_fig=True,
     Returns:
         tuple: (AUC score, TPR at 1% FPR)
     """
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import os
-    
+        
     # Load ROC curve data
-    ROC_dir = f"./cache/{dataset_name}/{dataset_config_name}/attack_data_{model_name}@{dataset_name}"
+    if not ROC_dir:
+        ROC_dir = os.path.join(parent_dir_path, 'cache', f'{dataset_name}', f"{dataset_config_name}", f'attack_data_{model_name}@{dataset_name}')
+
     data_path = os.path.join(ROC_dir, "roc_stat.npz")
     
     if not os.path.exists(data_path):
-        print(f"Error: ROC data not found at {data_path}")
+        print(f"\033[93mWarning: ROC data not found at {data_path}\033[0m")
         return None, None
         
     data = np.load(data_path)
@@ -157,9 +158,9 @@ def run_experiment(override_args=None):
     finetune_config_path = args.finetune_config_path
     printIsFileExists(finetune_config_path)
     if args.debug:
-        target_model_output_dir = os.path.join(".", "ft_llms", "debug", model_name, dataset_name, curr_time_str, "target")
+        target_model_output_dir = os.path.join(here, "ft_llms", "debug", model_name, dataset_name, curr_time_str, "target")
     else:
-        target_model_output_dir = os.path.join(".", "ft_llms", model_name, dataset_name, curr_time_str, "target")
+        target_model_output_dir = os.path.join(here, "ft_llms", model_name, dataset_name, curr_time_str, "target")
         
     args.configs['target_model_output_dir'] = target_model_output_dir
     print(f"{target_model_output_dir=}")
@@ -171,21 +172,29 @@ def run_experiment(override_args=None):
         "model_name": model_name,
         "dataset": args.dataset,
         "curr_time_str": curr_time_str,
+        'wandb': args.wandb,
     }
     
-    if os.path.exists(target_model_output_dir):
-        print(f"Target model already exists at {target_model_output_dir}. Skipping finetuning.")
-    else:
+    # if os.path.exists(target_model_output_dir):
+    #     print(f"Target model already exists at {target_model_output_dir}. Skipping finetuning.")
+    # else:
+    if not os.path.exists(target_model_output_dir):
+        print(f"Finetuning target model")
         main_llms_finetune(finetune_config_path, target_model_args)
+    else:
+        print(f"Target model already exists at {target_model_output_dir}. Skipping finetuning.")
+
+    # # Add synchronization barrier to ensure all processes finish finetuning before proceeding
+    # if torch.distributed.is_initialized():
+    #     print("Waiting for all processes to complete target model finetuning...")
+    #     torch.distributed.dist.barrier()
+    #     print("All processes have completed target model finetuning. Proceeding...")
     
     
     # create reference dataset
     data_generation_config_path = args.data_generation_config_path
     printIsFileExists(data_generation_config_path)
-    if args.debug:
-        generated_dataset_dir = os.path.join(args.cache_path, 'debug', args.dataset.name, args.dataset.config_name, f"refer@{args.model_name}", curr_time_str)
-    else:
-        generated_dataset_dir = os.path.join(args.cache_path, args.dataset.name, args.dataset.config_name, f"refer@{args.model_name}", curr_time_str)
+    generated_dataset_dir = os.path.join(args.cache_path, args.dataset.name, args.dataset.config_name, f"refer@{args.model_name}", curr_time_str)
         
     data_generation_args = {
         "debug": args.debug,
@@ -196,16 +205,18 @@ def run_experiment(override_args=None):
         "curr_time_str": curr_time_str,
     }
 
-    if os.path.exists(generated_dataset_dir):
-        print(f"Generated dataset already exists at {generated_dataset_dir}. Skipping data generation.")
-    else:
+    printIsFileExists(generated_dataset_dir)
+    if not os.path.exists(generated_dataset_dir):
+        print(f"Generating reference dataset")
         run_data_generation(data_generation_config_path, data_generation_args)
+    else:
+        print(f"Reference dataset already exists at {generated_dataset_dir}. Skipping generation.")
     
     # finetune reference model
     if args.debug:
-        reference_model_output_dir = os.path.join(".", "ft_llms", "debug", model_name, dataset_name, curr_time_str, "reference")
+        reference_model_output_dir = os.path.join(here, "ft_llms", "debug", model_name, dataset_name, curr_time_str, "reference")
     else:
-        reference_model_output_dir = os.path.join(".", "ft_llms", model_name, dataset_name, curr_time_str, "reference")
+        reference_model_output_dir = os.path.join(here, "ft_llms", model_name, dataset_name, curr_time_str, "reference")
         
     args.configs['reference_model_output_dir'] = reference_model_output_dir
     print(f"{reference_model_output_dir=}")
@@ -220,10 +231,11 @@ def run_experiment(override_args=None):
         "generated_dataset_dir": generated_dataset_dir,
     }
     
-    if os.path.exists(reference_model_output_dir):
-        print(f"Reference model already exists at {reference_model_output_dir}. Skipping finetuning.")
-    else:
+    if not os.path.exists(reference_model_output_dir):
+        print(f"Finetuning reference model")
         main_llms_finetune(finetune_config_path, reference_model_args)
+    else:
+        print(f"Reference model already exists at {reference_model_output_dir}. Skipping finetuning.")
     
     attack_data_path = os.path.join(args.cache_path, args.dataset.name, args.dataset.config_name)
     if args.debug:
@@ -244,31 +256,53 @@ def run_experiment(override_args=None):
     
     args.update_config_from_dict(run_attack_args)
     # run attack
-    run_attack_function(None, args_dict=args.configs)
+    print(f"Running attack")
+    save_path = run_attack_function(None, args_dict=args.configs)
+    
+    ROC_dir = os.path.dirname(save_path)
     
     # plot ROC curve
-    auc_score, tpr_at_1pct_fpr = plot_roc_curve(model_name, dataset_name, dataset_config_name, save_fig=args.save_fig, show_fig=args.show_fig)
+    auc_score, tpr_at_1pct_fpr = plot_roc_curve(model_name, dataset_name, dataset_config_name, save_fig=args.save_fig, show_fig=args.show_fig, ROC_dir=ROC_dir)
+    print(f"{run_attack_args=}")
     print(f"AUC Score: {auc_score}")
     print(f"TPR at 1% FPR: {tpr_at_1pct_fpr}")
     
     results_csv_path = "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/exp_results.csv"
     with open(results_csv_path, "a") as f:
-        f.write(f"{model_name},{dataset_name},{dataset_config_name},{args.attack_args.attack_type},{args.attack_args.peak_top_k},{auc_score},{tpr_at_1pct_fpr}\n")
+        f.write(f"{model_name},{dataset_name},{dataset_config_name},{args.attack_args.attack_type},{args.attack_args.attack_strategy.peak_top_k},{auc_score},{tpr_at_1pct_fpr},{curr_time_str}\n")
     print(f"Results saved to {results_csv_path}")
 
 
 if __name__ == "__main__":
     
+    transformers_logging.set_verbosity_error()
+    warnings.filterwarnings("ignore", message=".*attention_mask.*")
+    warnings.filterwarnings("ignore", message=".*pad_token_id.*")
+    warnings.filterwarnings("ignore", message="Setting.*pad_token_id.*")
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
     print("Running script: pipeline_attack.py")
     
-    model_names = ['EleutherAI/gpt-j-6B'] #, []'gpt2', 'tiiuae/falcon-rw-1b', 'EleutherAI/gpt-j-6B'] #, 'meta-llama/Llama-2-7b-hf']
-    dataset_names_and_configs = {'wikitext': 'wikitext-2-raw-v1',
-                                # 'xsum': 'EdinburghNLP/xsum',
-                                'ag_news': 'fancyzhx/ag_news',
+    model_names = [
+                    'gpt2', 
+                    'tiiuae/falcon-rw-1b'
+                    ] #['EleutherAI/gpt-j-6B'] #, []'gpt2', 'tiiuae/falcon-rw-1b', 'EleutherAI/gpt-j-6B'] #, 'meta-llama/Llama-2-7b-hf']
+    dataset_names_and_configs = {
+                                'ag_news': 'default',
+                                'wikitext': 'wikitext-2-raw-v1',
+                                'xsum': 'default',
                                 }
 
-    attack_types = ['SPV-MIA_split_to_words', 'ours', 'SPV-MIA_correct_split_to_tokens', ]
-    peak_top_k = ['5', '10', '15', '19']
+    attack_types = [
+                    'SPV-MIA_split_to_words', 
+                    'SPV-MIA_correct_split_to_tokens'
+                    'ours', 
+                    ]
+    peak_top_k = [
+                '10', 
+                '15',
+                '19'
+                ]
 
     clis = []
     override_args = []
@@ -281,9 +315,8 @@ if __name__ == "__main__":
                     command = f"--model_name \"{model_name}\" --dataset.name \"{dataset_name}\" --dataset.config_name \"{dataset_config_name}\" --attack_args.attack_type \"{attack_type}\" --attack_args.attack_strategy.peak_top_k {k}"
                     clis.append(command)
                     
-                    # Dictionary structure with proper nesting
+                    
                     override_args.append({
-                        'debug': False,
                         'model_name': model_name,
                         'dataset': {
                             'name': dataset_name,
@@ -292,12 +325,12 @@ if __name__ == "__main__":
                         'attack_args': {
                             'attack_type': attack_type,
                             'attack_strategy': {
-                                'peak_top_k': int(k)  # Convert to integer
+                                'peak_top_k': int(k) 
                             }
                         }
                     })
                     
-                    if attack_type != 'ours':
+                    if attack_type != 'ours': # run only 'ours' attack with all peak_top_k values
                         break
     
     for override_arg in override_args:
@@ -305,8 +338,15 @@ if __name__ == "__main__":
             print(f"Running with override args: {override_arg}")
             run_experiment(override_args=override_arg)
         except Exception as e:
-            print(f"Error occurred: {e}")
+            print(f"\033[93mWarning: Error occurred: {e}\033[0m")
+            print(f"\033[93mTraceback:\033[0m")
+            # traceback.print_exc()
+            # print(f"\033[93m{'='*50}\033[0m")
             continue
+        
+        # Print in green: one iteration completed
+        print("\033[92mOne iteration completed successfully.\033[0m")
+        # break
 
     print("Pipeline attack completed.")
 

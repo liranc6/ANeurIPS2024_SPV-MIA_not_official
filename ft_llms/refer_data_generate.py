@@ -2,10 +2,14 @@ import os
 import numpy as np
 import torch
 from tqdm.auto import tqdm as original_tqdm
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 import logging
 import random
 import sys
+import lightning as L
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
+import torch.distributed as dist  # Import for explicit distributed control
+
 here = os.path.dirname(__file__)
 here = os.path.dirname(__file__)
 parent_dir_path = os.path.dirname(here)
@@ -18,11 +22,7 @@ import argparse
 import yaml
 import datasets
 from datasets import Image, Dataset, load_from_disk, concatenate_datasets
-from accelerate import Accelerator
-from accelerate.logging import get_logger
-import trl
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM, BitsAndBytesConfig, TrainingArguments, AutoConfig, LlamaTokenizer
-
 
 from src.parser import parse_args
 
@@ -30,6 +30,51 @@ def tqdm(*args, **kwargs):
     if 'dynamic_ncols' not in kwargs:
         kwargs['dynamic_ncols'] = True
     return original_tqdm(*args, **kwargs)
+
+
+class TextGenerationModule(L.LightningModule):
+    """Lightning module for text generation"""
+    
+    def __init__(self, model, tokenizer, model_type):
+        super().__init__()
+        self.model = model
+        self.tokenizer = tokenizer
+        self.model_type = model_type
+        
+    def predict_step(self, batch, batch_idx):
+        try:
+            prompt = batch["text"]
+            input_ids = self.tokenizer(prompt, return_tensors="pt", padding=True).input_ids.to(self.device)
+            clipped_ids = input_ids[:, :16]
+            
+            gen_tokens = self.model.generate(
+                clipped_ids,
+                num_beams=1,
+                do_sample=True,
+                max_length=input_ids.size(-1),
+            )
+                
+            if self.model_type == "llama":
+                gen_tokens = gen_tokens[:, 1:]
+                
+            loss = self.model(gen_tokens, labels=gen_tokens).loss
+            
+            gen_text = self.tokenizer.batch_decode(gen_tokens)
+            
+            return {
+                'generated_text': gen_text,
+                'loss': loss.item(),
+                'batch_idx': batch_idx
+            }
+                
+        except Exception as e:
+            print(f"Error processing batch {batch_idx}: {e}")
+            return {
+                'generated_text': [],
+                'loss': None,
+                'batch_idx': batch_idx
+            }
+
 
 def run_data_generation(args_filename=None, args_dict=None):
     
@@ -44,15 +89,41 @@ def run_data_generation(args_filename=None, args_dict=None):
         assert isinstance(args_dict, dict), f"args_dict should be a dictionary"
         tmp_args.update_config_from_dict(args_dict)
 
-    
     args = tmp_args
     
-    # print the arguments being used
-    args.print_config()
+    # print the arguments being used only if on the main thread
+    if torch.distributed.is_initialized():
+        if torch.distributed.get_rank() == 0:
+            args.print_config()
+    else:
+        args.print_config()
     
-    # Create an accelerator for this run
-    accelerator = Accelerator()
-    print(f"Using device: {accelerator.device}")
+    # Handle debug mode and distributed training conflict
+    if args.debug and hasattr(args, 'distributed_training') and args.distributed_training.use_distributed:
+        print("\033[93mWarning: Debug mode is enabled but distributed training is also requested. Distributed training will take precedence.\033[0m")
+        devices = -1  # Use all available GPUs
+        strategy = "ddp"  # Distributed Data Parallel
+    elif args.debug:
+        print("Debug mode enabled - using single device for reference data generation")
+        devices = 1
+        strategy = "auto"
+    else:
+        devices = -1  # Use all available GPUs
+        strategy = "ddp"  # Distributed Data Parallel
+        
+    # Setup Lightning trainer for multi-GPU
+    trainer = L.Trainer(
+        accelerator="gpu",
+        devices=devices,  # Use specified devices
+        strategy=strategy,  # Use specified strategy
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=True,
+    )
+    
+    print(f"Using {trainer.num_devices} devices")
+    print(f"Strategy: {trainer.strategy}")
+        
 
     # Initialize model, tokenizer, datasets
     config = AutoConfig.from_pretrained(args.model_name)
@@ -67,7 +138,7 @@ def run_data_generation(args_filename=None, args_dict=None):
         args.target_model, 
         quantization_config=bnb_config,
         torch_dtype=torch_dtype,
-        local_files_only=True,  # Consider setting to False if not found locally
+        local_files_only=False,
         config=config,
         cache_dir=args.cache_path
     )
@@ -88,86 +159,65 @@ def run_data_generation(args_filename=None, args_dict=None):
     print(f"Train dataset size: {len(train_dataset)}")
     
     # Take a subset for prompt generation
-    prompt_dataset = train_dataset# Dataset.from_dict(train_dataset)
-    prompt_dataloader = DataLoader(prompt_dataset, batch_size=1)
+    prompt_dataset = train_dataset
+    
+    # Lightning will automatically handle data distribution across GPUs
+    prompt_dataloader = DataLoader(
+        prompt_dataset, 
+        batch_size=1, 
+        shuffle=False,
+        num_workers=2  # Optional: add workers for data loading
+    )
 
-    model, prompt_dataloader = accelerator.prepare(model, prompt_dataloader)
+    # Create Lightning module
+    lightning_module = TextGenerationModule(model, tokenizer, model_type)
 
     # Generate texts based on prompts
-    generated_dataset = {"text": []}
     print("Generating texts...")
     
-    for i, text in enumerate(tqdm(prompt_dataloader)):
-        try:
-            prompt = (text["text"])
-            input_ids = tokenizer(prompt, return_tensors="pt", padding=True).input_ids.to(accelerator.device)
-            clipped_ids = input_ids[:, :16]
-            
-            if hasattr(model, "module"):
-                gen_tokens = model.module.generate(
-                    clipped_ids,
-                    num_beams=1,
-                    do_sample=True,
-                    max_length=input_ids.size(-1),
-                )
+    # Lightning automatically distributes prediction across all GPUs
+    predictions = trainer.predict(lightning_module, prompt_dataloader)
+    
+    # Process results - Lightning automatically gathers results from all GPUs
+    generated_dataset = {"text": []}
+    
+    # add a barrier to ensure all processes are synchronized before processing results
+    if dist.is_initialized():
+        dist.barrier()
+        
+    # add a barrier by lightning to ensure all processes are synchronized before processing results
+    print("Processing generated texts...")
+    # Only process on rank 0 to avoid duplication
+    if trainer.is_global_zero:
+        for i, batch_result in enumerate(predictions):
+            if isinstance(batch_result, list):
+                for result in batch_result:
+                    if result and 'generated_text' in result and result['generated_text']:
+                        generated_dataset["text"].extend(result['generated_text'])
+                        
+                        # Periodically print a sample
+                        if 'batch_idx' in result and result['batch_idx'] % 200 == 0:
+                            print(f"Sample generated text: {result['generated_text'][0][:100]}...")
             else:
-                gen_tokens = model.generate(
-                    clipped_ids,
-                    num_beams=1,
-                    do_sample=True,
-                    max_length=input_ids.size(-1),
-                )
-                
-            if model_type == "llama":
-                gen_tokens = gen_tokens[:, 1:]
-                
-            loss = model(gen_tokens, labels=gen_tokens).loss
-            # print(f"Sample {i}, Loss: {loss.item()}")
-            
-            gen_text = tokenizer.batch_decode(gen_tokens)
-            generated_dataset["text"].extend(gen_text)
-            
-            # Periodically print a sample
-            if i % 200 == 0:
-                print(f"Sample generated text: {gen_text[0][:100]}...")
-                
-                
-        except Exception as e:
-            print(f"Error processing batch {i}: {e}")
-            continue
-        
-
-    
-    # Save the generated dataset
-    generated_dataset = Dataset.from_dict(generated_dataset)
-    
-    # Handle special model name case
-    if args.model_name == "/mnt/data0/fuwenjie/MIA-LLMs/cache/models--decapoda-research--llama-7b-hf/snapshots/5f98eefcc80e437ef68d457ad7bf167c2c6a1348":
-        args.model_name = "decapoda-research/llama-7b-hf"
-    
-        
-    save_dir = args.generated_dataset_dir #os.path.join(args.cache_path, args.dataset_name, args.dataset.config_name, f"refer@{args.model_name}", args.curr_time_str)
-    print(f"Saving generated dataset to {save_dir}{accelerator.device}")
-    generated_dataset.save_to_disk(os.path.join(save_dir, f"{accelerator.device}"))
-
-    accelerator.wait_for_everyone()
-
-    if accelerator.is_main_process:
-        print("Main process: concatenating datasets from all devices")
-        concatenated_dataset = None
-        for sub_dir in os.listdir(save_dir):
-            data_path = os.path.join(save_dir, sub_dir)
-            if os.path.isdir(data_path):
-                print(f"Loading dataset from {data_path}")
-                if concatenated_dataset is None:
-                    concatenated_dataset = load_from_disk(data_path)
-                else:
-                    dataset = load_from_disk(data_path)
-                    concatenated_dataset = concatenate_datasets([concatenated_dataset, dataset])
+                if batch_result and 'generated_text' in batch_result and batch_result['generated_text']:
+                    generated_dataset["text"].extend(batch_result['generated_text'])
                     
-        print(f"Saving final concatenated dataset to {save_dir}")
-        concatenated_dataset.save_to_disk(save_dir)
-        print(f"Final dataset size: {len(concatenated_dataset)}")
+                    # Periodically print a sample
+                    if 'batch_idx' in batch_result and batch_result['batch_idx'] % 200 == 0:
+                        print(f"Sample generated text: {batch_result['generated_text'][0][:100]}...")
+
+    # Save the generated dataset - only on rank 0
+    if trainer.is_global_zero:
+        generated_dataset = Dataset.from_dict(generated_dataset)
+        
+        # Handle special model name case
+        if args.model_name == "/mnt/data0/fuwenjie/MIA-LLMs/cache/models--decapoda-research--llama-7b-hf/snapshots/5f98eefcc80e437ef68d457ad7bf167c2c6a1348":
+            args.model_name = "decapoda-research/llama-7b-hf"
+        
+        save_dir = args.generated_dataset_dir
+        print(f"Saving generated dataset to {save_dir}")
+        generated_dataset.save_to_disk(save_dir)
+        print(f"Final dataset size: {len(generated_dataset)}")
     
     return True
 

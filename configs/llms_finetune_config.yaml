@@ -1,4 +1,4 @@
-debug: false
+debug: False
 debug_config_path: null
 
 # Model configuration
@@ -61,7 +61,7 @@ validation_split_percentage: 0.1
 
 # Distributed training configuration
 distributed_training:
-  use_distributed: false
+  use_distributed: True
   num_processes: 0 # Number of processes for distributed training
   strategy: "ddp"  # ['ddp', 'fsdp', 'deepspeed']
   devices: "auto" # Automatically set to the number of GPUs available or specify a number
@@ -72,7 +72,7 @@ distributed_training:
 
 # Wandb configuration
 wandb:
-  enable: false
+  enable: true
   project_name: "LLM_MIA"
   notes: null  # Will be constructed from model_name, dataset_name, and curr_time_str
   mode: "online"                # ["online", "offline", "disabled"]
@@ -81,8 +81,8 @@ wandb:
 
 # Dataset configuration
 dataset:
-  name: "wikitext"  # This maps to your current dataset_name
-  config_name: "wikitext-2-raw-v1"  # This maps to your current dataset_config_name
+  name: "ftg"  # This maps to your current dataset_name
+  config_name: "ftg"  # This maps to your current dataset_config_name
   train:
     start_idx: 0  # This maps to your current train_sta_idx
     end_idx: 6000  # This maps to your current train_end_idx

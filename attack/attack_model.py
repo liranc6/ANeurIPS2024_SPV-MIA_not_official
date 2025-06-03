@@ -3,8 +3,8 @@ from pydoc import text
 import random
 
 import torch
-from accelerate import Accelerator
-from accelerate.logging import get_logger
+import lightning as L
+from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from attack import utils
 from attack.utils import Dict
 import numpy as np
@@ -21,8 +21,9 @@ import seaborn as sns
 from functools import partial
 import sys
 import os
+import logging
 
-logger = get_logger(__name__, "INFO")
+logger = logging.getLogger(__name__)
 
 PATH = os.getcwd()
 here = os.path.dirname(__file__)
@@ -34,7 +35,7 @@ sys.path.append(PROJECT_DIR)
 from src.utils import generate_neighbors
 
 
-def tqdm(iterable, desc, position=0, leave=False, **kwargs):
+def tqdm(iterable, desc, position=0, leave=False, disable=False, **kwargs):
     """Helper function to create consistent progress bars"""
     if 'dynamic_ncols' not in kwargs:
         kwargs['dynamic_ncols'] = True
@@ -44,11 +45,112 @@ def tqdm(iterable, desc, position=0, leave=False, **kwargs):
         desc=desc,
         leave=leave,
         position=position,
+        disable=disable,
         **kwargs,
-        # disable=not accelerator.is_main_process
     )
+
+
+class LimitedDataset(torch.utils.data.Dataset):
+    """Dataset wrapper that limits the number of samples"""
     
-accelerator = Accelerator()
+    def __init__(self, original_dataset, max_samples=None):
+        self.original_dataset = original_dataset
+        self.max_samples = max_samples or len(original_dataset)
+        
+    def __len__(self):
+        return min(len(self.original_dataset), self.max_samples)
+    
+    def __getitem__(self, idx):
+        if idx >= self.max_samples:
+            raise IndexError("Index out of range for limited dataset")
+        return self.original_dataset[idx]
+
+
+class PerturbedDataset(torch.utils.data.Dataset):
+    """Dataset wrapper that applies perturbation function on-demand"""
+    
+    def __init__(self, original_dataset, perturb_fn=None):
+        self.original_dataset = original_dataset
+        self.perturb_fn = perturb_fn
+        
+    def __len__(self):
+        return len(self.original_dataset)
+    
+    def __getitem__(self, idx):
+        item = self.original_dataset[idx]
+        # Store the perturbation function in the item for use in predict_step
+        if self.perturb_fn is not None:
+            # Apply perturbation to the text
+            perturbed_text = self.perturb_fn([item['text']])[0]  # perturb_fn expects a list
+            item = dict(item)  # Make a copy
+            item['text'] = perturbed_text
+        return item
+
+
+class AttackLightningModule(L.LightningModule):
+    """Lightning module for attack evaluation"""
+    
+    def __init__(self, model, reference_model, tokenizer, cfg):
+        super().__init__()
+        self.model = model
+        self.reference_model = reference_model
+        self.tokenizer = tokenizer
+        self.cfg = cfg
+        
+    def predict_step(self, batch, batch_idx):
+        texts = batch["text"]
+        
+        # # Apply perturbation function if it exists
+        # if 'perturb_fn' in batch and batch['perturb_fn'] is not None:
+        #     texts = batch['perturb_fn'](texts)
+        #     if texts is None or len(texts) == 0 or texts == "":
+        #         raise ValueError("No perturbed texts generated.")
+        
+        token_ids = self.tokenizer(texts, return_tensors="pt", padding=True)
+        
+        model_device = self.model.device
+        # Move token_ids and labels to the model's device
+        token_ids = {k: v.to(model_device) for k, v in token_ids.items()}
+        labels = token_ids['input_ids']
+        
+        with torch.no_grad():
+            outputs = self.model(**token_ids, labels=labels)
+            ref_outputs = self.reference_model(**token_ids, labels=labels)
+            
+        # Handle both scalar and per-sample losses
+        loss = outputs.loss
+        ref_loss = ref_outputs.loss
+        
+        # If loss is already a scalar (reduced), keep it as is
+        # If loss is per-sample, we need to handle it differently
+        if loss.dim() == 0:  # Scalar loss
+            loss_tensor = loss.unsqueeze(0)  # Shape: (1,)
+            ref_loss_tensor = ref_loss.unsqueeze(0)  # Shape: (1,)
+        else:  # Per-sample losses
+            loss_tensor = loss  # Keep original shape
+            ref_loss_tensor = ref_loss
+        
+        token_len_tensor = torch.tensor(token_ids['input_ids'].size(-1)).unsqueeze(0)
+        
+        # Gather across all ranks if in distributed mode
+        if self.trainer.world_size > 1:
+            gathered_losses = self.all_gather(loss_tensor)
+            gathered_ref_losses = self.all_gather(ref_loss_tensor)
+            gathered_token_lens = self.all_gather(token_len_tensor)
+            
+            return {
+                'loss': gathered_losses.flatten().cpu().float().numpy(),
+                'ref_loss': gathered_ref_losses.flatten().cpu().float().numpy(),
+                'token_len': gathered_token_lens.flatten().cpu().float().numpy()
+            }
+        else:
+            return {
+                'loss': loss_tensor.cpu().float().numpy(),
+                'ref_loss': ref_loss_tensor.cpu().float().numpy(),
+                'token_len': token_len_tensor.cpu().float().numpy()
+            }
+
+
 class AttackModel:
     def __init__(self, target_model, tokenizer, datasets, reference_model, shadow_model, cfg, mask_model=None, mask_tokenizer=None):
         self.target_model = target_model
@@ -56,6 +158,17 @@ class AttackModel:
         self.datasets = datasets
         self.kind = cfg.configs['attack_kind']
         self.cfg = cfg
+        
+        # Setup Lightning trainer for distributed evaluation
+        self.trainer = L.Trainer(
+            accelerator="auto",
+            devices=1, #"auto" if torch.cuda.is_available() else 1,
+            # strategy=None,
+            logger=False,
+            enable_checkpointing=False,
+            enable_progress_bar=True,  # Keep Lightning's progress bar for predict
+        )
+        
         if mask_model is not None:
             self.mask_model = mask_model
             self.mask_tokenizer = mask_tokenizer
@@ -65,43 +178,96 @@ class AttackModel:
             self.is_model_training = False
         if reference_model is not None:
             self.reference_model = reference_model
+            
+        # Ensure tokenizers have proper pad tokens set
+        if hasattr(tokenizer, 'pad_token_id') and tokenizer.pad_token_id is None:
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+            tokenizer.pad_token = tokenizer.eos_token
+            
+        if mask_tokenizer is not None:
+            if hasattr(mask_tokenizer, 'pad_token_id') and mask_tokenizer.pad_token_id is None:
+                mask_tokenizer.pad_token_id = mask_tokenizer.eos_token_id
+                mask_tokenizer.pad_token = mask_tokenizer.eos_token
+
+    @rank_zero_only
+    def log_info(self, message):
+        """Helper to log only on rank 0"""
+        logger.info(message)
 
     def llm_eval(self, model, data_loader, cfg, idx_rate, perturb_fn=None, refer_model=None):
-        model.eval()
-        losses = []
-        ref_losses = []
-        token_lens = []
-        data_loader_pbar = tqdm(
-            enumerate(data_loader),
-            "Evaluating",
-            # position=0,
-            leave=True,
+        """Evaluate model using Lightning trainer for distributed support"""
+        lightning_module = AttackLightningModule(model, refer_model, self.tokenizer, cfg)
+        
+        # Check if data_loader is a Dataset or DataLoader
+        if hasattr(data_loader, 'dataset'):
+            # It's a DataLoader
+            original_dataset = data_loader.dataset
+            batch_size = data_loader.batch_size
+        else:
+            # It's a Dataset (HuggingFace datasets.Dataset)
+            original_dataset = data_loader
+            batch_size = cfg.attack_args.eval_batch_size
+        
+        # Apply sample limit before any processing
+        if cfg.configs["maximum_samples"] is not None:
+            limited_dataset = LimitedDataset(original_dataset, cfg.configs["maximum_samples"])
+        else:
+            limited_dataset = original_dataset
+        
+        # Apply perturbation wrapper if needed
+        if perturb_fn is not None:
+            final_dataset = PerturbedDataset(limited_dataset, perturb_fn)
+        else:
+            final_dataset = limited_dataset
+        
+        # Create new DataLoader
+        data_loader = DataLoader(
+            final_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False
         )
-        for iteration, texts in data_loader_pbar:
-            texts = texts["text"]
-            if cfg.configs["maximum_samples"] is not None:
-                if iteration * accelerator.num_processes >= cfg.configs["maximum_samples"]:
-                    break
-            if perturb_fn is not None:
-                texts = perturb_fn(texts)
-                if texts is None or len(texts) == 0 or texts == "":
-                    raise ValueError("No perturbed texts generated.")
-            token_ids = self.tokenizer(texts, return_tensors="pt", padding=True).to(accelerator.device)
-            labels = token_ids.input_ids
-            with torch.no_grad():
-                outputs = model(**token_ids, labels=labels)
-                ref_outputs = refer_model(**token_ids, labels=labels)
-            loss = outputs.loss
-            ref_loss = ref_outputs.loss
-            token_lens.append(accelerator.gather(torch.tensor(token_ids.input_ids.size()[-1]).reshape(-1, 1).to(accelerator.device)).detach().cpu().numpy()) # TODO: may cause bug when running attacks in paralell.
-            losses.append(accelerator.gather(loss.reshape(-1, 1)).detach().cpu().to(torch.float32).numpy())
-            ref_losses.append(accelerator.gather(ref_loss.reshape(-1, 1)).detach().cpu().to(torch.float32).numpy())
-            # print(f"{accelerator.device}@{texts}")
-            # print(f"time duration: {time.time() - start_time}s")
-        losses = np.concatenate(losses, axis=0)
-        ref_losses = np.concatenate(ref_losses, axis=0)
-        token_lens = np.concatenate(token_lens, axis=0)
-        # token_lens = np.array(token_lens, dtype=np.int32)
+        
+        if self.cfg.debug:
+            limited_dataset = LimitedDataset(final_dataset, max_samples=2 * batch_size)
+            data_loader = DataLoader(
+                            limited_dataset,
+                            batch_size=batch_size,
+                            shuffle=False,
+                            num_workers=0,
+                            pin_memory=False
+                        )
+        
+        # Use Lightning trainer for prediction
+        predictions = self.trainer.predict(lightning_module, data_loader)
+        
+        # Process results - only on rank 0 to avoid duplication
+        if self.trainer.is_global_zero:
+            losses = []
+            ref_losses = []
+            token_lens = []
+            
+            for batch_preds in predictions:
+                if isinstance(batch_preds, list):
+                    for pred in batch_preds:
+                        losses.extend(pred['loss'])
+                        ref_losses.extend(pred['ref_loss'])
+                        token_lens.extend(pred['token_len'])
+                else:
+                    losses.extend(batch_preds['loss'])
+                    ref_losses.extend(batch_preds['ref_loss'])
+                    token_lens.extend(batch_preds['token_len'])
+            
+            losses = np.array(losses)
+            ref_losses = np.array(ref_losses)
+            token_lens = np.array(token_lens)
+        else:
+            # Return empty arrays on non-zero ranks
+            losses = np.array([])
+            ref_losses = np.array([])
+            token_lens = np.array([])
+        
         return losses, ref_losses, token_lens
 
     def eval_perturb(self, model, dataset, cfg):
@@ -118,42 +284,64 @@ class AttackModel:
         ori_losses = []
         ref_ori_losses = []
         ori_dataset = deepcopy(dataset)
+        
+        # Only show progress bars on rank 0
+        disable_progress = not self.trainer.is_global_zero
+        
         perturbation_pbar = tqdm(
-                                range(cfg.configs["perturbation_number"]), 
-                                "Generating perturbed samples",
-                                # position=0,
-                                leave=True
-                                )
+            range(cfg.configs["perturbation_number"]), 
+            total=cfg.configs["perturbation_number"],
+            desc="Generating perturbed samples",
+            leave=True,
+            disable=disable_progress
+        )
         
         for i in perturbation_pbar:
-            idx_rate = i / cfg.configs["perturbation_number"] * 0.7 # perturbation rate
+            idx_rate = i / cfg.configs["perturbation_number"] * 0.7  # perturbation rate
             ori_loss, ref_ori_loss, ori_token_len = self.llm_eval(model, ori_dataset, cfg, idx_rate, refer_model=self.reference_model)
-            ori_losses.append(ori_loss)
-            ref_ori_losses.append(ref_ori_loss)
-            perturb_fn = partial(self.sentence_perturbation, idx_rate=idx_rate)
-            sampled_per_losses = []
-            sampled_ref_per_losses = []
             
-            sample_pbar = tqdm(
-                                range(cfg.configs["sample_number"]), 
-                                "Generating perturbed samples", 
-                                # position=1,
-                                # leave=False
-                            )
-            for _ in sample_pbar: # generate multiple perturbed samples and get the losses
-                per_loss, ref_per_loss, per_token_len = self.llm_eval(model, ori_dataset, cfg, idx_rate, perturb_fn=perturb_fn, refer_model=self.reference_model)
-                sampled_per_losses.append(per_loss)
-                sampled_ref_per_losses.append(ref_per_loss)
-            sampled_per_losses = np.concatenate(sampled_per_losses, axis=-1)
-            sampled_ref_per_losses = np.concatenate(sampled_ref_per_losses, axis=-1)
-            per_losses.append(np.expand_dims(sampled_per_losses, axis=-1))
-            ref_per_losses.append(np.expand_dims(sampled_ref_per_losses, axis=-1))
-        ori_losses = np.concatenate(ori_losses, axis=-1)
-        ref_ori_losses = np.concatenate(ref_ori_losses, axis=-1)
-        per_losses = np.concatenate(per_losses, axis=-1)
-        var_losses = per_losses - np.expand_dims(ori_losses, axis=-2)
-        ref_per_losses = np.concatenate(ref_per_losses, axis=-1) if cfg.configs["calibration"] else None
-        ref_var_losses = ref_per_losses - np.expand_dims(ref_ori_losses, axis=-2) if cfg.configs["calibration"] else None
+            # Only process on rank 0
+            if self.trainer.is_global_zero:
+                ori_losses.append(ori_loss)
+                ref_ori_losses.append(ref_ori_loss)
+                
+                perturb_fn = partial(self.sentence_perturbation, idx_rate=idx_rate)
+                sampled_per_losses = []
+                sampled_ref_per_losses = []
+                
+                sample_pbar = tqdm(
+                    range(cfg.configs["sample_number"]), 
+                    total=cfg.configs["sample_number"],
+                    desc="Generating perturbed samples",
+                    disable=disable_progress
+                )
+                
+                for _ in sample_pbar:  # generate multiple perturbed samples and get the losses
+                    per_loss, ref_per_loss, per_token_len = self.llm_eval(model, ori_dataset, cfg, idx_rate, perturb_fn=perturb_fn, refer_model=self.reference_model)
+                    sampled_per_losses.append(per_loss)
+                    sampled_ref_per_losses.append(ref_per_loss)
+                
+                sampled_per_losses = np.concatenate(sampled_per_losses, axis=-1)
+                sampled_ref_per_losses = np.concatenate(sampled_ref_per_losses, axis=-1)
+                per_losses.append(np.expand_dims(sampled_per_losses, axis=-1))
+                ref_per_losses.append(np.expand_dims(sampled_ref_per_losses, axis=-1))
+        
+        # Only process final results on rank 0
+        if self.trainer.is_global_zero:
+            ori_losses = np.concatenate(ori_losses, axis=-1)
+            ref_ori_losses = np.concatenate(ref_ori_losses, axis=-1)
+            per_losses = np.concatenate(per_losses, axis=-1)
+            var_losses = per_losses - np.expand_dims(ori_losses, axis=-2)
+            ref_per_losses = np.concatenate(ref_per_losses, axis=-1) if cfg.configs["calibration"] else None
+            ref_var_losses = ref_per_losses - np.expand_dims(ref_ori_losses, axis=-2) if cfg.configs["calibration"] else None
+        else:
+            # Return empty results on non-zero ranks
+            ori_losses = np.array([])
+            ref_ori_losses = np.array([])
+            per_losses = np.array([])
+            var_losses = np.array([])
+            ref_per_losses = None
+            ref_var_losses = None
 
         output = (Dict(
             per_losses=per_losses,
@@ -166,6 +354,11 @@ class AttackModel:
             ref_var_losses=ref_var_losses,
         ))
         return output
+
+    @rank_zero_only
+    def save_features(self, features, path):
+        """Save features only on rank 0 process"""
+        utils.save_dict_to_npz(features, path)
 
     def data_prepare(self, kind, cfg):
         """
@@ -184,7 +377,7 @@ class AttackModel:
         The function returns a dictionary containing the member feature vectors, non-member feature vectors,
         reference member feature vectors, and reference non-member feature vectors.
         """
-        logger.info("Preparing data...")
+        self.log_info("Preparing data...")
         data_path = os.path.join(PATH, cfg.configs["attack_data_path"], f"attack_data_{cfg.configs['model_name']}@{cfg.configs['dataset_name']}")
         target_model = getattr(self, kind + "_model")
         mem_data = self.datasets[kind]["train"]
@@ -198,45 +391,42 @@ class AttackModel:
         pathlist = (mem_path, nonmem_path, ref_mem_path, ref_nonmem_path) if cfg.configs["calibration"] else (mem_path, nonmem_path)
 
         if not utils.check_files_exist(*pathlist) or not cfg.configs["load_attack_data"]:
-            with open(cfg.closest_tokens_path, 'rb') as f:
-                self.cosine_similarities = torch.load(f)
-                assert isinstance(self.cosine_similarities, dict), "cosine_similarities should be a dict"
+            # Load cosine similarities only where needed
+            if hasattr(cfg, 'closest_tokens_path'):
+                with open(cfg.closest_tokens_path, 'rb') as f:
+                    self.cosine_similarities = torch.load(f)
+                    assert isinstance(self.cosine_similarities, dict), "cosine_similarities should be a dict"
                 
-            logger.info("Generating feature vectors for member data...")
+            self.log_info("Generating feature vectors for member data...")
             mem_feat, ref_mem_feat = self.eval_perturb(target_model, mem_data, cfg)
-            if accelerator.is_main_process:
-                utils.save_dict_to_npz(mem_feat, mem_path)
-                if cfg.configs["calibration"]:
-                    utils.save_dict_to_npz(ref_mem_feat, ref_mem_path)
+            self.save_features(mem_feat, mem_path)
+            if cfg.configs["calibration"]:
+                self.save_features(ref_mem_feat, ref_mem_path)
 
-            logger.info("Generating feature vectors for non-member data...")
+            self.log_info("Generating feature vectors for non-member data...")
             nonmem_feat, ref_nonmem_feat = self.eval_perturb(target_model, nonmem_data, cfg)
-            if accelerator.is_main_process:
-                utils.save_dict_to_npz(nonmem_feat, nonmem_path)
-                if cfg.configs["calibration"]:
-                    utils.save_dict_to_npz(ref_nonmem_feat, ref_nonmem_path)
+            self.save_features(nonmem_feat, nonmem_path)
+            if cfg.configs["calibration"]:
+                self.save_features(ref_nonmem_feat, ref_nonmem_path)
 
-            logger.info("Saving feature vectors...")
-
+            self.log_info("Saving feature vectors...")
         else:
-            logger.info("Loading feature vectors...")
+            self.log_info("Loading feature vectors...")
             mem_feat = utils.load_dict_from_npz(mem_path)
             ref_mem_feat = utils.load_dict_from_npz(ref_mem_path) if cfg.configs["calibration"] else None
             nonmem_feat = utils.load_dict_from_npz(nonmem_path)
             ref_nonmem_feat = utils.load_dict_from_npz(ref_nonmem_path) if cfg.configs["calibration"] else None
 
-        logger.info("Data preparation complete.")
+        self.log_info("Data preparation complete.")
 
         return Dict(
             mem_feat=mem_feat,
             nonmem_feat=nonmem_feat,
             ref_mem_feat=ref_mem_feat,
             ref_nonmem_feat=ref_nonmem_feat,
-                    )
+        )
 
     def feat_prepare(self, info_dict, cfg):
-        # mem_info = info_dict.mem_feat
-        # ref_mem_info = info_dict.ref_mem_feat
         if cfg.configs["calibration"]:
             get_prob = lambda logprob: np.power(np.e, -logprob)
             mem_feat = ((get_prob(info_dict.mem_feat.per_losses).mean((-1, -2)) - get_prob(info_dict.mem_feat.ori_losses).mean(-1)) -
@@ -247,12 +437,11 @@ class AttackModel:
             mem_feat = info_dict.mem_feat.var_losses / info_dict.mem_feat.ori_losses
             nonmem_feat = info_dict.nonmem_feat.var_losses / info_dict.nonmem_feat.ori_losses
 
-
+        # Ensure features are arrays, not scalars
+        mem_feat = np.atleast_1d(mem_feat)
+        nonmem_feat = np.atleast_1d(nonmem_feat)
+    
         if cfg.configs["attack_kind"] == "stat":
-            # mem_feat = mem_feat[:, :, 0]
-            # nonmem_feat = nonmem_feat[:, :, 0]
-            # mem_feat[np.isnan(mem_feat)] = 0
-            # nonmem_feat[np.isnan(nonmem_feat)] = 0
             feat = - np.concatenate([mem_feat, nonmem_feat])
             ground_truth = np.concatenate([np.zeros(mem_feat.shape[0]), np.ones(nonmem_feat.shape[0])]).astype(int)
 
@@ -264,10 +453,10 @@ class AttackModel:
 
         raw_info = self.data_prepare("target", cfg)
         feat, ground_truth = self.feat_prepare(raw_info, cfg)
-        # self.distinguishability_plot(raw_info['mem_feat']['ori_losses'].mean(-1),
-        #                              raw_info['nonmem_feat']['ori_losses'].mean(-1))
-        # self.distinguishability_plot(feat[:1000], feat[-1000:])
-        self.eval_attack(ground_truth, -feat, path=save_path)
+        self.eval_attack(ground_truth, -feat, path=save_path, plot=False)
+        
+        return save_path
+        
 
     def tokenize_and_mask(self, text, span_length, pct, idx_rate, ceil_pct=False):
         cfg = self.cfg
@@ -275,8 +464,7 @@ class AttackModel:
         attack_type = cfg.attack_type
         if attack_type == "ours":
             attack_strategy = cfg.attack_strategy
-        
-            tokens = self.mask_tokenizer.tokenize(text) # expectation: returns a list of tokens
+            tokens = self.mask_tokenizer.tokenize(text)  # expectation: returns a list of tokens
         elif attack_type == "SPV-MIA_split_to_words":
             tokens = text.split(' ')
             
@@ -293,7 +481,7 @@ class AttackModel:
             indexes_to_replace = np.random.choice(len(tokens), size=n_spans, replace=False)
             for idx in indexes_to_replace:
                 tokens[idx] = mask_string
-        else: # not attack_strategy == "ours": 
+        else:  # not attack_strategy == "ours": 
             while n_masks < n_spans:
                 start = np.random.randint(0, len(tokens) - span_length)
                 end = start + span_length
@@ -323,23 +511,40 @@ class AttackModel:
         cfg = self.cfg
         n_expected = self.count_masks(texts)
         stop_id = self.mask_tokenizer.encode(f"<extra_id_{max(n_expected)}>")[0]
-        tokens = self.mask_tokenizer(texts, return_tensors="pt", padding=True).to(accelerator.device)
+        
+        # Use the correct device - either the mask model's device or current device
+        tokens = self.mask_tokenizer(texts, return_tensors="pt", padding=True)
 
         if cfg.attack_type == "ours":
             closest_tokens_path = cfg.closest_tokens_path
-            #load dict from file
+            # load dict from file
             with open(closest_tokens_path, 'r') as f:
                 closest_tokens = torch.load(f)
                 assert isinstance(closest_tokens, dict), "closest_tokens should be a dict"
             # get the closest tokens for each token in the input
             
-            ##TODO
+            # TODO
             raise NotImplementedError("closest_tokens is not implemented yet")
             
         else:
-            outputs = self.mask_model.generate(**tokens, max_length=150, do_sample=True, top_p=cfg.mask_top_p,
-                                      num_return_sequences=1, eos_token_id=stop_id)
+            if self.mask_tokenizer.pad_token_id is None:
+                self.mask_tokenizer.pad_token_id = self.mask_tokenizer.eos_token_id
+                self.mask_tokenizer.pad_token = self.mask_tokenizer.eos_token
+            
+            with torch.no_grad():
+                outputs = self.mask_model.generate(
+                    input_ids=tokens.input_ids,
+                    attention_mask=tokens.attention_mask,  # Explicitly pass attention mask
+                    max_length=150, 
+                    do_sample=True, 
+                    top_p=cfg.mask_top_p,
+                    num_return_sequences=1, 
+                    eos_token_id=stop_id,
+                    pad_token_id=self.mask_tokenizer.pad_token_id,  # Explicitly set pad_token_id
+                    use_cache=True
+                )
             outputs = self.mask_tokenizer.batch_decode(outputs, skip_special_tokens=False)
+            
         return outputs
 
     def extract_fills(self, texts):
@@ -391,7 +596,6 @@ class AttackModel:
         cfg = self.cfg
         
         strategy = cfg.attack_args.attack_strategy
-        # strategy = {"name": "embeddings", 'peak_top_k': 4, 'max_neighbors': 2, 'n_tokens': 5}
         span_length = cfg.span_length
         buffer_size = cfg.buffer_size
         pct = cfg.pct
@@ -399,7 +603,7 @@ class AttackModel:
         
         perturbed_texts = []
         if cfg.attack_args.attack_type == "ours":
-            single_text = texts
+            single_text = texts[0] if isinstance(texts, list) else texts
             tokens = self.mask_tokenizer.tokenize(single_text)
             n_spans = int(multiplier * len(tokens))
             strategy['n_tokens'] = n_spans
@@ -407,29 +611,7 @@ class AttackModel:
             neighbors, _ = generate_neighbors(single_text, None, self.mask_tokenizer, self.cosine_similarities, top_k=0, strategy=strategy)
             neighbor = neighbors[1]
             neighbor = neighbor['text']
-            # original_text = neighbors.pop(0)
-            # neighbor = neighbors[0]
             perturbed_texts.append(neighbor)
-            
-            # texts_pbar = tqdm(
-            #                     enumerate(texts),
-            #                     "Generating perturbed texts", 
-            #                     # position=2,  # This should be properly positioned based on nesting level
-            #                     leave=False,
-            #                     total=len(texts),
-            #                 )
-            # # tqdm(enumerate(texts), total=len(texts), desc="Generating perturbed texts", leave=False)    
-            # for idx, text in texts_pbar:
-            #     tokens = self.mask_tokenizer.tokenize(text)
-            #     n_spans = int(multiplier * len(tokens))
-            #     strategy['n_tokens'] = n_spans
-                
-            #     neighbors, _ = generate_neighbors(text, None, self.mask_tokenizer, self.cosine_similarities, top_k=0, strategy=strategy)
-            #     neighbor = neighbors[1]
-            #     neighbor = neighbor['text']
-            #     # original_text = neighbors.pop(0)
-            #     # neighbor = neighbors[0]
-            #     perturbed_texts.append(neighbor)
                 
         else:       
             masked_texts = [self.tokenize_and_mask(x, span_length, pct, idx_rate, cfg.ceil_pct) for x in texts]
@@ -468,7 +650,6 @@ class AttackModel:
         # Finding the threshold point where FPR + TPR equals 1
         tpr_1fpr = tpr[np.argmin(np.abs(fpr - 0.01))]
         logger.info(f"TPR@1%FPR on the target model: {tpr_1fpr}")
-
 
         if plot:
             # plot the ROC curve

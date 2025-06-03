@@ -1,30 +1,30 @@
 # General settings
 random_seed: 48
-curr_time_str: '2025-05-20_14-06'  # Will use current time if null
+curr_time_str: '2025-05-29_10-58' #null # Will use current time if null
 
 # Model and dataset configuration
 model_name: "gpt2"  # ['gpt2', 'tiiuae/falcon-rw-1b', 'EleutherAI/gpt-j-6B', 'meta-llama/Llama-2-7b-hf']
 
 dataset:
   name: "wikitext"  # ['wikitext', 'xsum', 'ag_news'] and maybe, ['squad', 'squad_v2', 'wmt14']
-  config_name: "wikitext-2-raw-v1"  # ['wikitext-2-raw-v1', 'EdinburghNLP/xsum', 'fancyzhx/ag_news']
+  config_name: "wikitext-2-raw-v1"  # ['wikitext-2-raw-v1', 'EdinburghNLP/xsum', 'ag_news']
   train:
     start_idx: 0
-    end_idx: 30
+    end_idx: 200
   eval:
     start_idx: 0
-    end_idx: 30
+    end_idx: 200
 
 # Paths and caching
 cache_path: "./cache/debug"
 use_dataset_cache: true
 base_output_dir: "./ft_llms/debug"
 
-# Target model training config
-target_model_args:
-  epochs: 2
+# # Target model training config
+# target_model_args:
+#   epochs: 2
 
-# Reference data generation config
+# # Reference data generation config
 refer_data_args:
   cache_path: "./cache/debug"
 
@@ -47,3 +47,16 @@ attack_args:
 # Visualization settings
 save_fig: False
 show_fig: False
+
+# Distributed training configuration
+distributed_training:
+  use_distributed: False
+
+# Wandb configuration
+wandb:
+  enable: False
+  project_name: "LLM_MIA"
+  notes: null  # Will be constructed from model_name, dataset_name, and curr_time_str
+  mode: "disabled"                # ["online", "offline", "disabled"]
+  log_model: false
+  save_code: true

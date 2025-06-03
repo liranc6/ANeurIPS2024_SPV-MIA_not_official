@@ -8,7 +8,7 @@ from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_tr
 import pandas as pd
 import sys
 import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, TQDMProgressBar
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.strategies import DDPStrategy, DeepSpeedStrategy
 from torch.utils.data import DataLoader
@@ -429,6 +429,7 @@ def setup_model_and_tokenizer(args):
     if tokenizer.pad_token_id is None:
         logger.info("Pad token id is None, setting to eos token id...")
         tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer.pad_token = tokenizer.eos_token
 
     # Setup quantization
     if args.use_int4:
@@ -542,8 +543,22 @@ def main_llms_finetune(args_filename=None, args_dict=None):
         
     args = tmp_args
 
-    # print the arguments being used
-    args.print_config()
+    # print the arguments being used only if on the main thread
+    if torch.distributed.is_initialized():
+        if torch.distributed.get_rank() == 0:
+            args.print_config()
+    else:
+        args.print_config()
+    
+    # Handle debug mode and distributed training conflict
+    if args.debug and hasattr(args, 'distributed_training') and args.distributed_training.use_distributed:
+        print("\033[93mWarning: Debug mode is enabled but distributed training is also requested. Distributed training will take precedence.\033[0m")
+        # Keep distributed training settings as-is
+    elif args.debug:
+        # Force disable distributed training only when debug is true AND distributed is not requested
+        logger.warning("Debug mode enabled - disabling distributed training")
+        if hasattr(args, 'distributed_training'):
+            args.distributed_training.use_distributed = False
     
     # Setup Wandb environment
     if hasattr(args, 'wandb') and args.wandb.enable:
@@ -561,19 +576,18 @@ def main_llms_finetune(args_filename=None, args_dict=None):
     if args.model_name == "/mnt/data0/fuwenjie/MIA-LLMs/cache/models--decapoda-research--llama-7b-hf/snapshots/5f98eefcc80e437ef68d457ad7bf167c2c6a1348":
         args.model_name = "decapoda-research/llama-7b-hf"
 
-    # Create output directory
-    create_folder(args.output_dir)
-
     # Setup distributed training strategy
     strategy = get_training_strategy(args)
     
     # Determine devices
-    devices = 1
+    devices = 1 
     if hasattr(args, 'distributed_training') and args.distributed_training.use_distributed:
         devices = args.distributed_training.devices
         if devices != "auto":
             devices = int(devices)
         logger.info(f"Using distributed training with {devices} devices and {args.distributed_training.strategy} strategy")
+    else:
+        logger.info("Using single device training")
 
     # Setup model and tokenizer
     model, tokenizer = setup_model_and_tokenizer(args)
@@ -596,8 +610,9 @@ def main_llms_finetune(args_filename=None, args_dict=None):
             save_last=True,
         ),
         LearningRateMonitor(logging_interval='step'),
+        TQDMProgressBar(refresh_rate=10), # refresh every 10 batches
     ]
-    
+         
     # Setup Wandb logger (only if enabled)
     wandb_logger = setup_wandb_logger(args)
     
@@ -615,10 +630,11 @@ def main_llms_finetune(args_filename=None, args_dict=None):
         logger=wandb_logger,  # Will be None if wandb is disabled
         enable_checkpointing=True,
         enable_model_summary=True,
-        deterministic=True if args.debug else False,
-        # Distributed training optimizations
-        sync_batchnorm=True if strategy != "auto" else False,
-        use_distributed_sampler=True,
+        enable_progress_bar=True,
+        # deterministic=True if args.debug else False,
+        # Distributed training optimizations - only enable if actually using distributed
+        sync_batchnorm=True if (strategy != "auto" and not args.debug) else False,
+        # use_distributed_sampler=True,
     )
     
     logger.info(f"Output directory: {args.output_dir}")
@@ -630,19 +646,28 @@ def main_llms_finetune(args_filename=None, args_dict=None):
         logger.info("Wandb logging disabled")
 
     # Train the model
-    trainer.fit(lightning_module, data_module)
+    try:
+        trainer.fit(lightning_module, data_module)
+    except Exception as e:
+        logger.error(f"Training failed with error: {e}")
+        # Clean up any distributed processes
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        trainer.fit(lightning_module, data_module)
     
     # Save the final model
     if not args.disable_peft:
         model = lightning_module.model.merge_and_unload()
     else:
         model = lightning_module.model
-        
+    
+    # Create output directory
+    create_folder(args.output_dir)
+    
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     
     logger.info(f"Model saved to {args.output_dir}")
-
 
 if __name__ == "__main__":
     main_llms_finetune()

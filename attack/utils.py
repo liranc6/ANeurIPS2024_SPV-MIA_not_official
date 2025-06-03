@@ -49,12 +49,7 @@ def check_files_exist(*file_paths):
 
 
 def create_folder(folder_path):
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
-        print(f"Folder '{folder_path}' created.")
-    else:
-        print(f"Folder '{folder_path}' already exists.")
-
+    os.makedirs(folder_path, exist_ok=True)
 
 def save_dict_to_npz(my_dict, file_path):
     """
