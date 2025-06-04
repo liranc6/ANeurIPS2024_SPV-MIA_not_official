@@ -1,5 +1,5 @@
 # General settings
-debug: True
+debug: False
 random_seed: 48
 curr_time_str: '2025-05-29_11-18'  # Will use current time if null
 use_accelerate: true
@@ -12,10 +12,10 @@ dataset:
   config_name: "wikitext-2-raw-v1"  # ['wikitext-2-raw-v1', 'EdinburghNLP/xsum', 'ag_news']
   train:
     start_idx: 0
-    end_idx: 20 #-1
+    end_idx: -1
   eval:
     start_idx: 0
-    end_idx: 20 #-1
+    end_idx: -1
 
 # Script paths
 finetune_script_path: "/home/liranc6/W25/adversarial-attacks-on-deep-learning/project/ANeurIPS2024_SPV-MIA_not_official/ft_llms/llms_finetune.py"

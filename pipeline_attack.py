@@ -284,19 +284,19 @@ if __name__ == "__main__":
     print("Running script: pipeline_attack.py")
     
     model_names = [
-                    'gpt2', 
+                    # 'gpt2', 
                     'tiiuae/falcon-rw-1b'
                     ] #['EleutherAI/gpt-j-6B'] #, []'gpt2', 'tiiuae/falcon-rw-1b', 'EleutherAI/gpt-j-6B'] #, 'meta-llama/Llama-2-7b-hf']
     dataset_names_and_configs = {
-                                'ag_news': 'default',
                                 'wikitext': 'wikitext-2-raw-v1',
+                                'ag_news': 'default',
                                 'xsum': 'default',
                                 }
 
     attack_types = [
                     'SPV-MIA_split_to_words', 
-                    'SPV-MIA_correct_split_to_tokens'
                     'ours', 
+                    'SPV-MIA_correct_split_to_tokens'
                     ]
     peak_top_k = [
                 '10', 

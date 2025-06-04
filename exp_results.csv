@@ -1,4 +1,3 @@
-tiiuae/falcon-rw-1b,ag_news,default,SPV-MIA_split_to_words,10,0.5,0.0,2025-05-29_10-58
-gpt2,ag_news,default,ours,10,1.0,0.0,2025-05-29_10-58
-gpt2,ag_news,default,ours,15,1.0,0.0,2025-05-29_10-58
-gpt2,ag_news,default,ours,19,1.0,0.0,2025-05-29_10-58
+gpt2,wikitext,wikitext-2-raw-v1,SPV-MIA_split_to_words,10,0.0,0.0,2025-05-29_11-18
+tiiuae/falcon-rw-1b,wikitext,wikitext-2-raw-v1,SPV-MIA_split_to_words,10,1.0,0.0,2025-05-29_11-18
+gpt2,ag_news,default,SPV-MIA_split_to_words,10,0.0,0.0,2025-05-29_11-18
